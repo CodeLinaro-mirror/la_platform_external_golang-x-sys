@@ -1,0 +1,17 @@
+name: "golang-x-sys"
+description:
+    "This repository holds supplemental Go packages for low-level interactions with the operating system."
+
+third_party {
+  url {
+    type: HOMEPAGE
+    value: "https://go.googlesource.com/sys/"
+  }
+  url {
+    type: GIT
+    value: "https://go.googlesource.com/sys/"
+  }
+  version: "63515b42dcdf9544f4e6a02fd7632793fde2f72d"
+  last_upgrade_date { year: 2021 month: 8 day: 30 }
+  license_type: NOTICE
+}
