@@ -167,7 +167,7 @@ func TestFcntlFlock(t *testing.T) {
 // "-test.run=^TestPassFD$" and an environment variable used to signal
 // that the test should become the child process instead.
 func TestPassFD(t *testing.T) {
-	if (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && runtime.GOARCH == "arm64" {
+	if runtime.GOOS == "ios" {
 		t.Skip("cannot exec subprocess on iOS, skipping test")
 	}
 
@@ -488,8 +488,7 @@ func TestDup(t *testing.T) {
 }
 
 func TestPoll(t *testing.T) {
-	if runtime.GOOS == "android" ||
-		((runtime.GOOS == "darwin" || runtime.GOOS == "ios") && runtime.GOARCH == "arm64") {
+	if runtime.GOOS == "android" || runtime.GOOS == "ios" {
 		t.Skip("mkfifo syscall is not available on android and iOS, skipping test")
 	}
 
@@ -521,6 +520,28 @@ func TestPoll(t *testing.T) {
 		}
 		if n != 0 {
 			t.Errorf("Poll: wrong number of events: got %v, expected %v", n, 0)
+
+			// Identify which event(s) caused Poll to return.
+			// We can't trivially use a table here because Revents
+			// isn't the same type on all systems.
+			if fds[0].Revents&unix.POLLIN != 0 {
+				t.Log("found POLLIN event")
+			}
+			if fds[0].Revents&unix.POLLPRI != 0 {
+				t.Log("found POLLPRI event")
+			}
+			if fds[0].Revents&unix.POLLOUT != 0 {
+				t.Log("found POLLOUT event")
+			}
+			if fds[0].Revents&unix.POLLERR != 0 {
+				t.Log("found POLLERR event")
+			}
+			if fds[0].Revents&unix.POLLHUP != 0 {
+				t.Log("found POLLHUP event")
+			}
+			if fds[0].Revents&unix.POLLNVAL != 0 {
+				t.Log("found POLLNVAL event")
+			}
 		}
 		break
 	}
@@ -563,10 +584,17 @@ func TestSelect(t *testing.T) {
 		break
 	}
 
-	// On some BSDs the actual timeout might also be slightly less than the requested.
-	// Add an acceptable margin to avoid flaky tests.
-	if took < dur*2/3 {
-		t.Errorf("Select: got %v timeout, expected at least %v", took, dur)
+	// On some platforms (e.g. NetBSD) the actual timeout might be arbitrarily
+	// less than requested. However, Linux in particular promises to only return
+	// early if a file descriptor becomes ready (not applicable here), or the call
+	// is interrupted by a signal handler (explicitly retried in the loop above),
+	// or the timeout expires.
+	if took < dur {
+		if runtime.GOOS == "linux" {
+			t.Errorf("Select: slept for %v, expected %v", took, dur)
+		} else {
+			t.Logf("Select: slept for %v, requested %v", took, dur)
+		}
 	}
 
 	rr, ww, err := os.Pipe()
@@ -611,19 +639,16 @@ func TestGetwd(t *testing.T) {
 	switch runtime.GOOS {
 	case "android":
 		dirs = []string{"/", "/system/bin"}
-	case "darwin", "ios":
-		switch runtime.GOARCH {
-		case "arm64":
-			d1, err := ioutil.TempDir("", "d1")
-			if err != nil {
-				t.Fatalf("TempDir: %v", err)
-			}
-			d2, err := ioutil.TempDir("", "d2")
-			if err != nil {
-				t.Fatalf("TempDir: %v", err)
-			}
-			dirs = []string{d1, d2}
+	case "ios":
+		d1, err := ioutil.TempDir("", "d1")
+		if err != nil {
+			t.Fatalf("TempDir: %v", err)
 		}
+		d2, err := ioutil.TempDir("", "d2")
+		if err != nil {
+			t.Fatalf("TempDir: %v", err)
+		}
+		dirs = []string{d1, d2}
 	}
 	oldwd := os.Getenv("PWD")
 	for _, d := range dirs {

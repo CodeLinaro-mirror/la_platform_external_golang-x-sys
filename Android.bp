@@ -1,5 +1,5 @@
 // Automatically generated with:
-// go2bp -exclude golang.org/x/sys/windows/mkwinsyscall
+// go2bp -exclude golang.org/x/sys/windows/mkwinsyscall -exclude golang.org/x/sys/unix/internal/mkmerge
 
 bootstrap_go_package {
     name: "golang.org-x-sys-cpu",
@@ -62,11 +62,14 @@ bootstrap_go_package {
         "unix/str.go",
         "unix/syscall.go",
         "unix/syscall_linux.go",
+        "unix/syscall_linux_alarm.go",
         "unix/syscall_linux_amd64.go",
         "unix/syscall_linux_amd64_gc.go",
         "unix/syscall_linux_gc.go",
         "unix/syscall_unix.go",
         "unix/syscall_unix_gc.go",
+        "unix/sysvshm_linux.go",
+        "unix/sysvshm_unix.go",
         "unix/timestruct.go",
         "unix/zerrors_linux.go",
         "unix/zerrors_linux_amd64.go",

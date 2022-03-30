@@ -2,12 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build ignore
-// +build ignore
-
-// Test cases for mkmerge.go.
-// Usage:
-//     $ go test mkmerge.go mkmerge_test.go
 package main
 
 import (
@@ -105,6 +99,7 @@ func TestMerge(t *testing.T) {
 
 // build directives for arch{{.}}
 
+//go:build goos && arch{{.}}
 // +build goos,arch{{.}}
 
 package main
@@ -190,6 +185,7 @@ const (
 
 // build directives for arch{{.}}
 
+//go:build goos && arch{{.}}
 // +build goos,arch{{.}}
 
 package main

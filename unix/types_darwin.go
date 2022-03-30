@@ -16,17 +16,19 @@ package unix
 
 /*
 #define __DARWIN_UNIX03 0
-#define KERNEL
+#define KERNEL 1
 #define _DARWIN_USE_64_BIT_INODE
 #include <dirent.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <stdint.h>
 #include <signal.h>
 #include <termios.h>
 #include <unistd.h>
 #include <mach/mach.h>
 #include <mach/message.h>
 #include <sys/event.h>
+#include <sys/ipc.h>
 #include <sys/kern_control.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
@@ -34,6 +36,7 @@ package unix
 #include <sys/ptrace.h>
 #include <sys/resource.h>
 #include <sys/select.h>
+#include <sys/shm.h>
 #include <sys/signal.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -45,6 +48,7 @@ package unix
 #include <sys/un.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
+#include <sys/vsock.h>
 #include <net/bpf.h>
 #include <net/if.h>
 #include <net/if_dl.h>
@@ -71,6 +75,13 @@ struct sockaddr_any {
 	char pad[sizeof(union sockaddr_all) - sizeof(struct sockaddr)];
 };
 
+#if defined(__x86_64__)
+typedef struct stat64 stat_t;
+typedef struct statfs64 statfs_t;
+#else // __arm__
+typedef struct stat stat_t;
+typedef struct statfs statfs_t;
+#endif
 */
 import "C"
 
@@ -111,9 +122,9 @@ type _Gid_t C.gid_t
 
 // Files
 
-type Stat_t C.struct_stat64
+type Stat_t C.stat_t
 
-type Statfs_t C.struct_statfs64
+type Statfs_t C.statfs_t
 
 type Flock_t C.struct_flock
 
@@ -151,6 +162,18 @@ type RawSockaddrAny C.struct_sockaddr_any
 
 type RawSockaddrCtl C.struct_sockaddr_ctl
 
+type RawSockaddrVM C.struct_sockaddr_vm
+
+type XVSockPCB C.struct_xvsockpcb
+
+type XSocket C.struct_xsocket
+
+type XSocket64 C.struct_xsocket64
+
+type XSockbuf C.struct_xsockbuf
+
+type XVSockPgen C.struct_xvsockpgen
+
 type _Socklen C.socklen_t
 
 type Xucred C.struct_xucred
@@ -184,6 +207,11 @@ const (
 	SizeofSockaddrUnix     = C.sizeof_struct_sockaddr_un
 	SizeofSockaddrDatalink = C.sizeof_struct_sockaddr_dl
 	SizeofSockaddrCtl      = C.sizeof_struct_sockaddr_ctl
+	SizeofSockaddrVM       = C.sizeof_struct_sockaddr_vm
+	SizeofXvsockpcb        = C.sizeof_struct_xvsockpcb
+	SizeofXSocket          = C.sizeof_struct_xsocket
+	SizeofXSockbuf         = C.sizeof_struct_xsockbuf
+	SizeofXVSockPgen       = C.sizeof_struct_xvsockpgen
 	SizeofXucred           = C.sizeof_struct_xucred
 	SizeofLinger           = C.sizeof_struct_linger
 	SizeofIovec            = C.sizeof_struct_iovec
@@ -323,3 +351,26 @@ type Vmspace C.struct_vmspace
 type Pcred C.struct__pcred
 
 type Ucred C.struct__ucred
+
+// shm
+
+type SysvIpcPerm C.struct_ipc_perm
+type SysvShmDesc C.struct_shmid_ds
+
+const (
+	IPC_CREAT   = C.IPC_CREAT
+	IPC_EXCL    = C.IPC_EXCL
+	IPC_NOWAIT  = C.IPC_NOWAIT
+	IPC_PRIVATE = C.IPC_PRIVATE
+)
+
+const (
+	IPC_RMID = C.IPC_RMID
+	IPC_SET  = C.IPC_SET
+	IPC_STAT = C.IPC_STAT
+)
+
+const (
+	SHM_RDONLY = C.SHM_RDONLY
+	SHM_RND    = C.SHM_RND
+)

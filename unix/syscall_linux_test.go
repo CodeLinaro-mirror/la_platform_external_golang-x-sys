@@ -15,11 +15,13 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -117,6 +119,12 @@ func TestIoctlGetRTCWkAlrm(t *testing.T) {
 	defer f.Close()
 
 	v, err := unix.IoctlGetRTCWkAlrm(int(f.Fd()))
+
+	// Not all RTC drivers support wakeup alarms, and will return EINVAL in such cases.
+	if err == unix.EINVAL {
+		t.Skip("RTC_WKALM_RD ioctl not supported on this rtc, skipping test")
+	}
+
 	if err != nil {
 		t.Fatalf("failed to perform ioctl: %v", err)
 	}
@@ -209,6 +217,55 @@ func firstIPv4(t *testing.T, ifi *net.Interface) (net.IP, bool) {
 	}
 
 	return nil, false
+}
+
+func TestPidfd(t *testing.T) {
+	// Start a child process which will sleep for 1 hour; longer than the 10
+	// minute default Go test timeout.
+	cmd := exec.Command("sleep", "1h")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to exec sleep: %v", err)
+	}
+
+	fd, err := unix.PidfdOpen(cmd.Process.Pid, 0)
+	if err != nil {
+		// GOARCH arm/arm64 and GOOS android builders do not support pidfds.
+		if errors.Is(err, unix.ENOSYS) {
+			t.Skipf("skipping, pidfd_open is not implemented: %v", err)
+		}
+
+		t.Fatalf("failed to open child pidfd: %v", err)
+	}
+	defer unix.Close(fd)
+
+	// Child is running but not terminated.
+	if err := unix.Waitid(unix.P_PIDFD, fd, nil, unix.WEXITED|unix.WNOHANG, nil); err != nil {
+		t.Fatalf("failed to check for child exit: %v", err)
+	}
+
+	const want = unix.SIGHUP
+	if err := unix.PidfdSendSignal(fd, want, nil, 0); err != nil {
+		t.Fatalf("failed to signal child process: %v", err)
+	}
+
+	// Now verify that the child process received the expected signal.
+	var eerr *exec.ExitError
+	if err := cmd.Wait(); !errors.As(err, &eerr) {
+		t.Fatalf("child process terminated but did not return an exit error: %v", err)
+	}
+
+	if err := unix.Waitid(unix.P_PIDFD, fd, nil, unix.WEXITED, nil); !errors.Is(err, unix.ECHILD) {
+		t.Fatalf("expected ECHILD for final waitid, but got: %v", err)
+	}
+
+	ws, ok := eerr.Sys().(syscall.WaitStatus)
+	if !ok {
+		t.Fatalf("expected syscall.WaitStatus value, but got: %#T", eerr.Sys())
+	}
+
+	if got := ws.Signal(); got != want {
+		t.Fatalf("unexpected child exit signal, got: %s, want: %s", got, want)
+	}
 }
 
 func TestPpoll(t *testing.T) {
@@ -665,8 +722,22 @@ func TestClockNanosleep(t *testing.T) {
 			continue
 		} else if err != nil {
 			t.Errorf("ClockNanosleep(CLOCK_REALTIME, TIMER_ABSTIME, %#v (=%v), nil) = %v", &abs, until, err)
-		} else if slept := time.Since(start); slept < delay {
-			t.Errorf("ClockNanosleep(CLOCK_REALTIME, TIMER_ABSTIME, %#v (=%v), nil) slept only %v", &abs, until, slept)
+		} else {
+			// We asked for CLOCK_REALTIME, but we have no way to know whether it
+			// jumped backward after ClockNanosleep returned. Compare both ways,
+			// and only fail if both the monotonic and wall clocks agree that
+			// the elapsed sleep was too short.
+			//
+			// This can still theoretically fail spuriously: if the clock jumps
+			// forward during ClockNanosleep and then backward again before we can
+			// call time.Now, then we could end up with a time that is too short on
+			// both the monotonic scale (because of the forward jump) and the
+			// real-time scale (because of the backward jump. However, it seems
+			// unlikely that two such contrary jumps will ever occur in the time it
+			// takes to execute this test.
+			if now := time.Now(); now.Before(until) && now.Round(0).Before(until) {
+				t.Errorf("ClockNanosleep(CLOCK_REALTIME, TIMER_ABSTIME, %#v (=%v), nil) slept only until %v", &abs, until, now)
+			}
 		}
 		break
 	}
@@ -714,10 +785,10 @@ func TestOpenByHandleAt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("OpenByHandleAt: %v", err)
 			}
-			defer unix.Close(fd)
-
 			t.Logf("opened fd %v", fd)
 			f := os.NewFile(uintptr(fd), "")
+			defer f.Close()
+
 			slurp, err := ioutil.ReadAll(f)
 			if err != nil {
 				t.Fatal(err)
@@ -795,16 +866,35 @@ func TestEpoll(t *testing.T) {
 }
 
 func TestPrctlRetInt(t *testing.T) {
-	err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
-	if err != nil {
-		t.Skipf("Prctl: %v, skipping test", err)
+	skipc := make(chan bool, 1)
+	skip := func() {
+		skipc <- true
+		runtime.Goexit()
 	}
-	v, err := unix.PrctlRetInt(unix.PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0)
-	if err != nil {
-		t.Fatalf("failed to perform prctl: %v", err)
-	}
-	if v != 1 {
-		t.Fatalf("unexpected return from prctl; got %v, expected %v", v, 1)
+
+	go func() {
+		// This test uses prctl to modify the calling thread, so run it on its own
+		// throwaway thread and do not unlock it when the goroutine exits.
+		runtime.LockOSThread()
+		defer close(skipc)
+
+		err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
+		if err != nil {
+			t.Logf("Prctl: %v, skipping test", err)
+			skip()
+		}
+
+		v, err := unix.PrctlRetInt(unix.PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0)
+		if err != nil {
+			t.Errorf("failed to perform prctl: %v", err)
+		}
+		if v != 1 {
+			t.Errorf("unexpected return from prctl; got %v, expected %v", v, 1)
+		}
+	}()
+
+	if <-skipc {
+		t.SkipNow()
 	}
 }
 
