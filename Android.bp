@@ -19,7 +19,7 @@ bootstrap_go_package {
     pkgPath: "golang.org/x/sys/execabs",
     srcs: [
         "execabs/execabs.go",
-        "execabs/execabs_go118.go",
+        "execabs/execabs_go119.go",
     ],
     testSrcs: [
         "execabs/execabs_test.go",
