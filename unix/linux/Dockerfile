@@ -15,15 +15,21 @@ RUN apt-get update && apt-get install -y  --no-install-recommends \
 # Get the git sources. If not cached, this takes O(5 minutes).
 WORKDIR /git
 RUN git config --global advice.detachedHead false
-# Linux Kernel: Released 09 Jan 2022
-RUN git clone --branch v5.16 --depth 1 https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux
+# Linux Kernel: Released 12 Jun 2022
+RUN git clone --branch v5.19-rc2 --depth 1 https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux
 # GNU C library: Released 03 Feb 2022
 RUN git clone --branch release/2.35/master --depth 1 https://sourceware.org/git/glibc.git
 
+# Only for loong64, add kernel and glibc patch
+RUN git clone https://github.com/loongson/golang-infra.git /git/loong64-patches \
+    && git config --global user.name "golang" && git config --global user.email "golang@localhost" \
+    && cd /git/loong64-patches && git checkout glibc-v2.35 && cd /git/glibc && git am /git/loong64-patches/*.patch \
+    && curl -fsSL https://git.savannah.gnu.org/cgit/config.git/plain/config.sub -o /git/glibc/scripts/config.sub
+
 # Get Go
-ENV GOLANG_VERSION 1.18
+ENV GOLANG_VERSION 1.19rc2
 ENV GOLANG_DOWNLOAD_URL https://golang.org/dl/go$GOLANG_VERSION.linux-amd64.tar.gz
-ENV GOLANG_DOWNLOAD_SHA256 e85278e98f57cdb150fe8409e6e5df5343ecb13cebf03a5d5ff12bd55a80264f
+ENV GOLANG_DOWNLOAD_SHA256 9130c6f8e87ce9bb4813533a68c3f17c82c7307caf8795d3c9427652b77f81aa
 
 RUN curl -fsSL "$GOLANG_DOWNLOAD_URL" -o golang.tar.gz \
     && echo "$GOLANG_DOWNLOAD_SHA256  golang.tar.gz" | sha256sum -c - \
@@ -50,6 +56,17 @@ RUN apt-get update && apt-get install -y \
         gcc-s390x-linux-gnu         gcc-sparc64-linux-gnu     \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Only for loong64, getting tools of qemu-user and gcc-cross-compiler
+RUN apt-get update && apt-get install wget xz-utils -y && mkdir /loong64 && cd /loong64 \
+    && wget -q https://github.com/loongson/build-tools/releases/download/2021.12.21/qemu-loongarch-2022-4-01.tar.gz \
+    && tar xf qemu-loongarch-2022-4-01.tar.gz && cp ./4-1/new-world/qemu-loongarch64 /usr/bin/ \
+    && rm -rf qemu-loongarch-2022-4-01.tar.gz 4-1 \
+    && wget -q https://github.com/loongson/build-tools/releases/download/2021.12.21/loongarch64-clfs-2022-03-03-cross-tools-gcc-glibc.tar.xz \
+    && tar xf loongarch64-clfs-2022-03-03-cross-tools-gcc-glibc.tar.xz && mv cross-tools.gcc_glibc /usr/local/cross-tools-loong64 \
+    && rm -rf loongarch64-clfs-2022-03-03-cross-tools-gcc-glibc.tar.xz \
+    && ln -s /usr/local/cross-tools-loong64/bin/loongarch64-unknown-linux-gnu-gcc /usr/bin/loongarch64-linux-gnu-gcc \
+    && rm -rf /loong64
 
 # Let the scripts know they are in the docker environment
 ENV GOLANG_SYS_BUILD docker
