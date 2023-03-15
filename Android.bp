@@ -10,7 +10,13 @@ bootstrap_go_package {
         "cpu/cpu_gc_x86.go",
         "cpu/cpu_linux_noinit.go",
         "cpu/cpu_x86.go",
+        "cpu/endian_little.go",
         "cpu/hwcap_linux.go",
+        "cpu/parse.go",
+        "cpu/runtime_auxv.go",
+    ],
+    testSrcs: [
+        "cpu/parse_test.go",
     ],
 }
 
@@ -37,9 +43,6 @@ bootstrap_go_package {
 bootstrap_go_package {
     name: "golang.org-x-sys-unix",
     pkgPath: "golang.org/x/sys/unix",
-    deps: [
-        "golang.org-x-sys-internal-unsafeheader",
-    ],
     srcs: [
         "unix/affinity_linux.go",
         "unix/aliases.go",
@@ -60,7 +63,6 @@ bootstrap_go_package {
         "unix/sockcmsg_linux.go",
         "unix/sockcmsg_unix.go",
         "unix/sockcmsg_unix_other.go",
-        "unix/str.go",
         "unix/syscall.go",
         "unix/syscall_linux.go",
         "unix/syscall_linux_alarm.go",
@@ -82,7 +84,6 @@ bootstrap_go_package {
         "unix/ztypes_linux_amd64.go",
     ],
     testSrcs: [
-        "unix/export_test.go",
         "unix/ifreq_linux_test.go",
         "unix/syscall_internal_linux_test.go",
     ],
