@@ -9,10 +9,10 @@ package unix_test
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -49,7 +49,7 @@ func TestSysconf(t *testing.T) {
 // Event Ports
 
 func TestBasicEventPort(t *testing.T) {
-	tmpfile, err := ioutil.TempFile("", "eventport")
+	tmpfile, err := os.CreateTemp("", "eventport")
 	if err != nil {
 		t.Fatalf("unable to create a tempfile: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestEventPortFds(t *testing.T) {
 }
 
 func TestEventPortErrors(t *testing.T) {
-	tmpfile, err := ioutil.TempFile("", "eventport")
+	tmpfile, err := os.CreateTemp("", "eventport")
 	if err != nil {
 		t.Errorf("unable to create a tempfile: %v", err)
 	}
@@ -183,13 +183,15 @@ func TestEventPortErrors(t *testing.T) {
 	timeout.Nsec = 1
 	_, err = port.GetOne(timeout)
 	if err != unix.ETIME {
-		t.Errorf("unexpected lack of timeout")
+		// See https://go.dev/issue/58259
+		// Perhaps we sometimes get EINTR ???
+		t.Errorf("port.GetOne(%v) returned error %v, want %v", timeout, err, unix.ETIME)
 	}
 	err = port.DissociateFd(uintptr(0))
 	if err == nil {
 		t.Errorf("unexpected success dissociating unassociated fd")
 	}
-	events := make([]unix.PortEvent, 4, 4)
+	events := make([]unix.PortEvent, 4)
 	_, err = port.Get(events, 5, nil)
 	if err == nil {
 		t.Errorf("unexpected success calling Get with min greater than len of slice")
@@ -248,7 +250,7 @@ func TestPortEventSlices(t *testing.T) {
 	}
 	// Create, associate, and delete 6 files
 	for i := 0; i < 6; i++ {
-		tmpfile, err := ioutil.TempFile("", "eventport")
+		tmpfile, err := os.CreateTemp("", "eventport")
 		if err != nil {
 			t.Fatalf("unable to create tempfile: %v", err)
 		}
@@ -275,7 +277,7 @@ func TestPortEventSlices(t *testing.T) {
 	}
 	timeout := new(unix.Timespec)
 	timeout.Nsec = 1
-	events := make([]unix.PortEvent, 4, 4)
+	events := make([]unix.PortEvent, 4)
 	n, err = port.Get(events, 3, timeout)
 	if err != nil {
 		t.Errorf("Get failed: %v", err)
@@ -330,5 +332,57 @@ func TestPortEventSlices(t *testing.T) {
 	err = port.Close()
 	if err != nil {
 		t.Errorf("port.Close() failed: %v", err)
+	}
+}
+
+func TestLifreqSetName(t *testing.T) {
+	var l unix.Lifreq
+	err := l.SetName("12345678901234356789012345678901234567890")
+	if err == nil {
+		t.Fatal(`Lifreq.SetName should reject names that are too long`)
+	}
+	err = l.SetName("tun0")
+	if err != nil {
+		t.Errorf(`Lifreq.SetName("tun0") failed: %v`, err)
+	}
+}
+
+func TestLifreqGetMTU(t *testing.T) {
+	// Find links and their MTU using CLI tooling
+	// $ dladm show-link -p -o link,mtu
+	// net0:1500
+	out, err := exec.Command("dladm", "show-link", "-p", "-o", "link,mtu").Output()
+	if err != nil {
+		t.Fatalf("unable to use dladm to find data links: %v", err)
+	}
+	lines := strings.Split(string(out), "\n")
+	tc := make(map[string]string)
+	for _, line := range lines {
+		v := strings.Split(line, ":")
+		if len(v) == 2 {
+			tc[v[0]] = v[1]
+		}
+	}
+	ip_fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		t.Fatalf("could not open udp socket: %v", err)
+	}
+	// SIOCGLIFMTU is negative which confuses the compiler if used inline:
+	// Using "unix.IoctlLifreq(ip_fd, unix.SIOCGLIFMTU, &l)" results in
+	// "constant -1065850502 overflows uint"
+	reqnum := int(unix.SIOCGLIFMTU)
+	var l unix.Lifreq
+	for link, mtu := range tc {
+		err = l.SetName(link)
+		if err != nil {
+			t.Fatalf("Lifreq.SetName(%q) failed: %v", link, err)
+		}
+		if err = unix.IoctlLifreq(ip_fd, uint(reqnum), &l); err != nil {
+			t.Fatalf("unable to SIOCGLIFMTU: %v", err)
+		}
+		m := l.GetLifruUint()
+		if fmt.Sprintf("%d", m) != mtu {
+			t.Errorf("unable to read MTU correctly: expected %s, got %d", mtu, m)
+		}
 	}
 }

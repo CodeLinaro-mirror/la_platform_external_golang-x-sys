@@ -322,7 +322,7 @@ func passFDChild() {
 	}
 }
 
-// TestUnixRightsRoundtrip tests that UnixRights, ParseSocketControlMessage,
+// TestUnixRightsRoundtrip tests that UnixRights, ParseSocketControlMessage, ParseOneSocketControlMessage,
 // and ParseUnixRights are able to successfully round-trip lists of file descriptors.
 func TestUnixRightsRoundtrip(t *testing.T) {
 	testCases := [...][][]int{
@@ -350,6 +350,23 @@ func TestUnixRightsRoundtrip(t *testing.T) {
 		if len(scms) != len(testCase) {
 			t.Fatalf("expected %v SocketControlMessage; got scms = %#v", len(testCase), scms)
 		}
+
+		var c int
+		for len(b) > 0 {
+			hdr, data, remainder, err := unix.ParseOneSocketControlMessage(b)
+			if err != nil {
+				t.Fatalf("ParseOneSocketControlMessage: %v", err)
+			}
+			if scms[c].Header != hdr || !bytes.Equal(scms[c].Data, data) {
+				t.Fatal("expected SocketControlMessage header and data to match")
+			}
+			b = remainder
+			c++
+		}
+		if c != len(scms) {
+			t.Fatalf("expected %d SocketControlMessages; got %d", len(scms), c)
+		}
+
 		for i, scm := range scms {
 			gotFds, err := unix.ParseUnixRights(&scm)
 			if err != nil {
@@ -975,7 +992,8 @@ func TestSendmsgBuffers(t *testing.T) {
 		}
 		n, oobn, recvflags, _, err := unix.RecvmsgBuffers(fds[1], bufs, nil, 0)
 		if err != nil {
-			t.Fatal(err)
+			t.Error(err)
+			return
 		}
 		if n != 10 {
 			t.Errorf("got %d bytes, want 10", n)
@@ -1012,6 +1030,102 @@ func TestSendmsgBuffers(t *testing.T) {
 	if n != 10 {
 		t.Errorf("sent %d bytes, want 10", n)
 	}
+}
+
+// Issue 56384.
+func TestRecvmsgControl(t *testing.T) {
+	switch runtime.GOOS {
+	case "solaris", "illumos":
+		// Test fails on Solaris, saying
+		// "got 0 control messages, want 1".
+		// Not sure why; Solaris recvmsg man page says
+		// "For processes on the same host, recvmsg() can be
+		// used to receive a file descriptor from another
+		// process, but it cannot receive ancillary data."
+		t.Skipf("skipping on %s", runtime.GOOS)
+	}
+
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fds[0])
+	defer unix.Close(fds[1])
+
+	const payload = "hello"
+
+	// Start a goroutine that sends a control message followed by
+	// a payload on fds[1].
+	go func() {
+		f, err := os.Create(filepath.Join(t.TempDir(), "file"))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer f.Close()
+
+		rc, err := f.SyscallConn()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var rights []byte
+		err = rc.Control(func(fd uintptr) {
+			rights = unix.UnixRights(int(fd))
+		})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+
+		_, err = unix.SendmsgN(fds[1], nil, rights, nil, 0)
+		if err != nil {
+			t.Error(err)
+		}
+		if _, err := unix.Write(fds[1], []byte(payload)); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	// Read the control message sent by the goroutine.  The
+	// goroutine writes to fds[1], we read from fds[0].
+
+	cbuf := make([]byte, unix.CmsgSpace(4))
+	_, cn, _, _, err := unix.Recvmsg(fds[0], nil, cbuf, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbuf = cbuf[:cn]
+
+	// Read the payload sent by the goroutine.
+
+	buf := make([]byte, len(payload))
+	n, err := unix.Read(fds[0], buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf = buf[:n]
+	if payload != string(buf) {
+		t.Errorf("read payload %q, want %q", buf, payload)
+	}
+
+	// Check the control message.
+
+	cmsgs, err := unix.ParseSocketControlMessage(cbuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmsgs) != 1 {
+		t.Fatalf("got %d control messages, want 1", len(cmsgs))
+	}
+	cfds, err := unix.ParseUnixRights(&cmsgs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfds) != 1 {
+		t.Fatalf("got %d fds, want 1", len(cfds))
+	}
+	defer unix.Close(cfds[0])
 }
 
 // mktmpfifo creates a temporary FIFO and provides a cleanup function.

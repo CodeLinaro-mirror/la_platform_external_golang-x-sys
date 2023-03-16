@@ -1099,3 +1099,77 @@ func TestIoctlFileDedupeRange(t *testing.T) {
 			dedupe.Info[1].Bytes_deduped, 0)
 	}
 }
+
+// TestPwritevOffsets tests golang.org/issues/57291 where
+// offs2lohi was shifting by the size of long in bytes, not bits.
+func TestPwritevOffsets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.txt")
+
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+
+	const (
+		off = 20
+	)
+	b := [][]byte{{byte(0)}}
+	n, err := unix.Pwritev(int(f.Fd()), b, off)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(b) {
+		t.Fatalf("expected to write %d, wrote %d", len(b), n)
+	}
+
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := off + int64(len(b))
+	if info.Size() != want {
+		t.Fatalf("expected size to be %d, got %d", want, info.Size())
+	}
+}
+
+func TestReadvAllocate(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+
+	test := func(name string, fn func(fd int)) {
+		n := int(testing.AllocsPerRun(100, func() {
+			fn(int(f.Fd()))
+		}))
+		if n != 0 {
+			t.Errorf("%q got %d allocations, want 0", name, n)
+		}
+	}
+
+	iovs := make([][]byte, 8)
+	for i := range iovs {
+		iovs[i] = []byte{'A'}
+	}
+
+	test("Writev", func(fd int) {
+		unix.Writev(fd, iovs)
+	})
+	test("Pwritev", func(fd int) {
+		unix.Pwritev(fd, iovs, 0)
+	})
+	test("Pwritev2", func(fd int) {
+		unix.Pwritev2(fd, iovs, 0, 0)
+	})
+	test("Readv", func(fd int) {
+		unix.Readv(fd, iovs)
+	})
+	test("Preadv", func(fd int) {
+		unix.Preadv(fd, iovs, 0)
+	})
+	test("Preadv2", func(fd int) {
+		unix.Preadv2(fd, iovs, 0, 0)
+	})
+}
